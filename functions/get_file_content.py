@@ -2,6 +2,8 @@ import os
 from config import MAX_CHARS
 from google.genai import types
 
+from security import validate_access
+
 
 def get_file_content(working_directory, file_path):
     abs_working_dir = os.path.abspath(working_directory)
@@ -10,6 +12,9 @@ def get_file_content(working_directory, file_path):
         return f'Error: Cannot read "{file_path}" as it is outside the permitted working directory'
     if not os.path.isfile(abs_file_path):
         return f'Error: File not found or is not a regular file: "{file_path}"'
+    error = validate_access(working_directory, file_path, require_file=True)
+    if error:
+        return error
     try:
         with open(abs_file_path, "r") as f:
             content = f.read(MAX_CHARS)

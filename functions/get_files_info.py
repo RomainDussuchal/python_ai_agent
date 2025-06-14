@@ -1,16 +1,22 @@
 import os
 from google.genai import types
 
-def get_files_info(working_directory, directory=None):
+from security import validate_access
+
+def get_files_info(working_directory, directory=None, recursive=True, extensions=None):
     abs_working_dir = os.path.abspath(working_directory)
-    target_dir = abs_working_dir
+    target_dir = os.path.abspath(os.path.join(working_directory, directory or "."))
+
+    
     if directory:
         target_dir = os.path.abspath(os.path.join(working_directory, directory))
     if not target_dir.startswith(abs_working_dir):
         return f'Error: Cannot list "{directory}" as it is outside the permitted working directory'
     if not os.path.isdir(target_dir):
         return f'Error: "{directory}" is not a directory'
-    
+    error = validate_access(working_directory, directory or ".", require_file=False)
+    if error:
+        return error
     try:
         files_info = []
         for filename in os.listdir(target_dir):
