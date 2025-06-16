@@ -1,13 +1,23 @@
+### Updated main.py with 429 error handling for openai>=1.0.0
+
 import sys
 import os
-from google import genai
-from google.genai import types
+import openai
 from dotenv import load_dotenv
 
 from prompts import system_prompt
 from call_function import call_function, available_functions
 from config import MAX_ITERS
 
+# Token cost estimation (adjust as needed)
+TOKEN_COST_PER_1K = {
+    "gpt-4o": 0.005,        # $0.005 per 1K input tokens
+    "gpt-3.5-turbo": 0.0015 # $0.0015 per 1K input tokens
+}
+
+def estimate_cost(prompt_tokens, model):
+    cost_per_1k = TOKEN_COST_PER_1K.get(model, 0.005)
+    return (prompt_tokens / 1000) * cost_per_1k
 
 def main():
     load_dotenv()
@@ -20,9 +30,8 @@ def main():
         print('Example: python main.py "How do I build a calculator app?"')
         sys.exit(1)
 
-    api_key = os.environ.get("GEMINI_API_KEY")
-    client = genai.Client(api_key=api_key)
-   
+    client = openai.OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+    model = os.environ.get("MODEL_NAME", "gpt-4o")
 
     user_prompt = " ".join(args)
 
@@ -30,68 +39,49 @@ def main():
         print(f"User prompt: {user_prompt}\n")
 
     messages = [
-        types.Content(role="user", parts=[types.Part(text=user_prompt)]),
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
     ]
-    iters = 0
-    while True:
-        iters += 1
-        if iters > MAX_ITERS:
-            print(f"Maximum iterations ({MAX_ITERS}) reached.")
-            sys.exit(1)
 
-        try:
-            result = generate_content(client, messages, verbose)
-            if result:
-                print(result)
-                break
+    # Rough token estimate (4 chars per token)
+    estimated_tokens = sum(len(m["content"]) for m in messages) // 4
+    estimated_cost = estimate_cost(estimated_tokens, model)
+    print(f"Estimated token usage: ~{estimated_tokens} tokens")
+    print(f"Estimated cost: ${estimated_cost:.4f} using {model}")
 
-            user_input = input("\nYou: ")
-            messages.append(types.Content(role="user", parts=[types.Part(text=user_input)]))
-        except Exception as e:
-            print(f"Error in generate_content: {e}")
+    confirm = input("Proceed with this request? (y/n): ").strip().lower()
+    if confirm != 'y':
+        print("Aborted by user.")
+        return
 
 
+    try:
+        response = client.responses.create(
+        model="gpt-4o",
+        instructions="You are a coding assistant that talks like a pirate.",
+        input="How do I check if a Python object is an instance of a class?",
+         )
 
-def generate_content(client, messages, verbose):
-    response = client.models.generate_content(
-        model="gemini-2.0-flash-001",
-        contents=messages,
-        config=types.GenerateContentConfig(
-            tools=[available_functions], system_instruction=system_prompt
-        ),
-    )
+        print(response.output_text)
+       
+    except openai.APIConnectionError as e:
+        print("The server could not be reached")
+        print(e.__cause__)
+     
+    except openai.RateLimitError as e:
+        print("\n❌ Error: Rate limit or quota exceeded.\n")
+        print("Details:", str(e))
+        print("\n🔁 Suggestion: Try again later or contact OpenAI support if the issue persists.")
+       
+    except openai.APIStatusError as e:
+        print("Another non-200-range status code was received")
+        print(e.status_code)
+        print(e.response)
+      
 
-    if verbose:
-        print("Prompt tokens:", response.usage_metadata.prompt_token_count)
-        print("Response tokens:", response.usage_metadata.candidates_token_count)
+    except Exception as e:
+        print("\n❌ Unexpected error:", str(e))
+     
 
-    if response.candidates:
-        for candidate in response.candidates:
-            messages.append(candidate.content)
-
-    if response.function_calls:
-        function_responses = []
-        for function_call_part in response.function_calls:
-            function_result = call_function(function_call_part, verbose)
-            if (
-                not function_result.parts
-                or not function_result.parts[0].function_response
-            ):
-                raise Exception("empty function call result")
-            if verbose:
-                print(f"-> {function_result.parts[0].function_response.response}")
-            function_responses.append(function_result.parts[0])
-
-        # Add tool responses to messages and return to loop
-        messages.append(types.Content(role="tool", parts=function_responses))
-        return None
-
-    # If no function call, just respond as assistant and keep loop going
-    if response.text:
-        messages.append(types.Content(role="assistant", parts=[types.Part(text=response.text)]))
-        print(response.text)
-
-    return None
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
